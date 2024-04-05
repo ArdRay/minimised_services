@@ -1,0 +1,344 @@
+version: '3.8'
+
+services:
+  socket_proxy:
+    image: fluencelabs/docker-socket-proxy@sha256:1a0645aff1364aa8047046f8bf7b3aee061fa6dc2765073bee70bb51eccec5df
+    hostname: socket_proxy.internal
+    restart: always
+    networks:
+      - socket_proxy
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    environment:
+      - LOG_LEVEL=info # debug,info,notice,warning,err,crit,alert,emerg
+      ## Granted by Default
+      - EVENTS=1
+      - PING=1
+      - VERSION=1
+      ## Revoked by Default
+      # Security critical
+      - AUTH=0
+      - SECRETS=0
+      - POST=0 # Watchtower
+      - DELETE=0 # Watchtower
+        # GET Optons
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - CONTAINERS=1 # Traefik, portainer, etc.
+      - DISTRIBUTION=0
+      - EXEC=0
+      - IMAGES=0 # Portainer, Watchtower
+      - INFO=0 # Portainer
+      - NETWORKS=0 # Portainer, Watchtower
+      - NODES=0
+      - PLUGINS=0
+      - SERVICES=0 # Portainer
+      - SESSION=0
+      - SWARM=0
+      - SYSTEM=0
+      - TASKS=0 # Portaienr
+      - VOLUMES=0 # Portainer
+      # POST Options
+      - CONTAINERS_CREATE=0 # WatchTower
+      - CONTAINERS_START=0 # WatchTower
+      - CONTAINERS_UPDATE=0 # WatchTower
+      # DELETE Options
+      - CONTAINERS_DELETE=0 # WatchTower
+      - IMAGES_DELETE=0 # WatchTower
+    healthcheck:
+      test: netstat -an | grep 2375 > /dev/null; if [ 0 != $$? ]; then exit 1; fi;
+      interval: 5s
+      timeout: 10s
+    cpus: 0.5
+    mem_limit: 64m
+    mem_reservation: 32m
+    
+  vpn:
+    image: qmcgaw/gluetun:v3.38@sha256:5522794f5cce6d84bc7f06b1e3a3b836ede9100c64aec94543cb503bb2ecb72f
+    hostname: vpn.internal
+    networks:
+      - vpn
+    depends_on:
+      proxy:
+        condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+    environment:
+      - OPENVPN_USER=${OPENVPN_USER}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD}
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - SERVER_NAMES=PL#21,AT#17,CZ#1,BE#13
+      - OPENVPN_IPV6=off
+      - DOT=off
+      - SHADOWSOCKS=off
+      - HTTPPROXY=off
+      - FIREWALL=off
+      - FIREWALL_DEBUG=off
+      - TZ=Europe/Berlin
+      - PUID=1000
+      - PGUID=1000
+      - HEALTH_TARGET_ADDRESS=google.com
+      - HEALTH_VPN_DURATION_INITIAL=10s
+      - HEALTH_VPN_DURATION_ADDITION=5s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vpn-rtr.rule=Host(`downloader.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.vpn-rtr.entrypoints=tls"
+      - "traefik.http.routers.vpn-rtr.tls=true"
+      - "traefik.http.routers.vpn-rtr.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.vpn-rtr.service=vpn-svc"
+      - "traefik.http.services.vpn-svc.loadbalancer.server.port=8080"
+      - "traefik.http.routers.vpn-rtr.middlewares=default-headers@file"
+    cpus: 2
+    mem_limit: 512m
+    mem_reservation: 128m
+
+  qbittorrent:
+    image: ghcr.io/linuxserver/qbittorrent
+    network_mode: service:vpn
+    depends_on:
+      proxy:
+        condition: service_healthy
+      vpn:
+        condition: service_healthy
+    restart: always
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Berlin
+      - UMASK=022
+      - WEBUI_PORT=8080
+    volumes:
+      - /data/qbittorrent/downloads:/downloads
+      - /data/qbittorrent/config:/config
+    healthcheck:
+      test: curl -fSs http://127.0.0.1:8080 || exit 1
+      interval: 5s
+      timeout: 10s
+    cpus: 2
+    mem_limit: 2048m
+    mem_reservation: 512m
+
+  proxy:
+    image: traefik:v2.11.0
+    command:
+      - "--providers.docker.endpoint=tcp://socket_proxy.internal:2375"
+      - "--providers.docker.swarmMode=false"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=t2_proxy"
+      - "--providers.file.directory=/config"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=tls"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.tls.address=:443"
+      - "--entrypoints.ping.address=:8082"
+      - "--api=true"
+      - "--api.dashboard=true"
+      - "--api.debug=true"
+      - "--log.level=WARN"
+      - "--ping.entrypoint=ping"
+      - "--metrics.prometheus=true"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=cloudflare"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.resolvers=1.1.1.1:53"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.delayBeforeCheck=0"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      socket_proxy:
+        condition: service_healthy
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8082/ping || exit 1
+      interval: 5s
+      timeout: 10s
+    volumes:
+      - /data/traefik/tls:/letsencrypt
+      - /data/traefik/tls_options.yml:/config/tls_options.yml:ro
+      - /data/traefik/default_headers.yml:/config/default_headers.yml:ro
+    networks:
+      - socket_proxy
+      - proxy
+      - vpn
+      - media_automation
+    environment:
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN}
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.traefik_dash.loadbalancer.server.port=8080"
+      - "traefik.http.routers.traefik_dash.rule=Host(`proxy-01.${INTERNAL_DOMAIN}`) && PathPrefix(`/dashboard`, `/api`)"
+      - "traefik.http.routers.traefik_dash.entrypoints=tls"
+      - "traefik.http.routers.traefik_dash.tls=true"
+      - "traefik.http.routers.traefik_dash.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik_dash.service=api@internal"
+    cpus: 1
+    mem_limit: 512m
+    mem_reservation: 128m
+
+  emby:
+    image: ghcr.io/linuxserver/emby
+    networks:
+      - proxy
+      - media_automation
+    depends_on:
+      proxy:
+        condition: service_healthy
+    environment:
+      PUID: 1000
+      PGID: 1000
+      TZ: Europe/Berlin
+    volumes:
+      - /data/emby/config:/config
+      - /data/emby/persistent:/persistent
+      - /data/movies:/data/movies
+      - /data/series:/data/tvshows
+    healthcheck:
+     test: curl -fSs http://127.0.0.1:8096 || exit 1
+     interval: 5s
+     timeout: 10s
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.emby-rtr.rule=Host(`emby.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.emby-rtr.entrypoints=tls"
+      - "traefik.http.routers.emby-rtr.tls=true"
+      - "traefik.http.routers.emby-rtr.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.emby-rtr.service=emby-svc"
+      - "traefik.http.services.emby-svc.loadbalancer.server.port=8096"
+    cpus: 4
+    mem_limit: 8192m
+    mem_reservation: 512m
+ 
+  sonarr:
+    image: ghcr.io/linuxserver/sonarr
+    networks:
+      - media_automation
+      - vpn
+    depends_on:
+      proxy:
+        condition: service_healthy
+      jackett:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Berlin
+      - UMASK=022
+    volumes:
+      - /data/sonarr:/config
+      - /data/series:/tv
+      - /data/qbittorrent/downloads:/downloads
+    healthcheck:
+      test: curl -fSs http://127.0.0.1:8989 || exit 1
+      interval: 5s
+      timeout: 10s
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sonarr.rule=Host(`series.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.sonarr.entrypoints=tls"
+      - "traefik.http.routers.sonarr.tls=true"
+      - "traefik.http.routers.sonarr.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.sonarr.service=sonarr"
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+    cpus: 2
+    mem_limit: 512m
+    mem_reservation: 128m
+
+  radarr:
+    image: ghcr.io/linuxserver/radarr
+    networks:
+      - media_automation
+      - vpn
+    depends_on:
+      proxy:
+        condition: service_healthy
+      jackett:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Berlin
+      - UMASK=022
+    volumes:
+      - /data/radarr:/config
+      - /data/movies:/movies
+      - /data/qbittorrent/downloads:/downloads
+    healthcheck:
+      test: curl -fSs http://127.0.0.1:7878 || exit 1
+      interval: 5s
+      timeout: 10s
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radarr.rule=Host(`movies.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.radarr.entrypoints=tls"
+      - "traefik.http.routers.radarr.tls=true"
+      - "traefik.http.routers.radarr.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.radarr.service=radarr"
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+    cpus: 2
+    mem_limit: 512m
+    mem_reservation: 128m
+
+  jackett:
+    image: ghcr.io/linuxserver/jackett
+    networks:
+      - media_automation
+      - vpn
+    depends_on:
+      proxy:
+        condition: service_healthy
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Berlin
+    volumes:
+      - /data/qbittorrent/downloads:/downloads
+      - /data/jackett:/config
+    healthcheck:
+      test: curl -fSs http://127.0.0.1:9117 || exit 1
+      interval: 5s
+      timeout: 10s
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jackett.rule=Host(`jaeckli.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.jackett.entrypoints=tls"
+      - "traefik.http.routers.jackett.tls=true"
+      - "traefik.http.routers.jackett.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.jackett.service=jackett"
+      - "traefik.http.services.jackett.loadbalancer.server.port=9117" 
+    cpus: 2
+    mem_limit: 512m
+    mem_reservation: 128m
+
+networks:
+  proxy:
+    driver: bridge
+  socket_proxy:
+    driver: bridge
+    internal: true
+  media_automation:
+    driver: bridge

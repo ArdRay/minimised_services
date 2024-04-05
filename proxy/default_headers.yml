@@ -1,0 +1,21 @@
+http:
+  middlewares:
+    default-headers:
+      headers:
+        frameDeny: true
+        stsPreload: true
+        stsSeconds: 15552000
+        contentTypeNosniff: true
+        browserXssFilter: true
+        accessControlAllowMethods:
+          - GET
+          - POST
+        accessControlMaxAge: 100
+        addVaryheader: true
+        #contentSecurityPolicy: script-src 'self'
+        referrerPolicy: "same-origin" 
+        forceSTSHeader: true
+        customFrameOptionsValue: SAMEORIGIN
+        permissionsPolicy: "camera 'none'; microphone 'none'; payment 'none'; usb 'none'; vr 'none'; vibrate 'self';"
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
