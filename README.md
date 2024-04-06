@@ -1,0 +1,8 @@
+# minimised_services
+
+## Parameters
+- INTERNAL_DOMAIN
+- OPENVPN_USER
+- OPENVPN_PASSWORD
+- ACME_EMAIL
+- CF_DNS_API_TOKEN

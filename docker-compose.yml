@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   socket_proxy:
     image: fluencelabs/docker-socket-proxy@sha256:1a0645aff1364aa8047046f8bf7b3aee061fa6dc2765073bee70bb51eccec5df
@@ -183,7 +181,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.services.traefik_dash.loadbalancer.server.port=8080"
-      - "traefik.http.routers.traefik_dash.rule=Host(`proxy-01.${INTERNAL_DOMAIN}`) && PathPrefix(`/dashboard`, `/api`)"
+      - "traefik.http.routers.traefik_dash.rule=Host(`proxy.${INTERNAL_DOMAIN}`) && PathPrefix(`/dashboard`, `/api`)"
       - "traefik.http.routers.traefik_dash.entrypoints=tls"
       - "traefik.http.routers.traefik_dash.tls=true"
       - "traefik.http.routers.traefik_dash.tls.certresolver=letsencrypt"
@@ -341,4 +339,6 @@ networks:
     driver: bridge
     internal: true
   media_automation:
+    driver: bridge
+  vpn:
     driver: bridge
